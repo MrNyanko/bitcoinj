@@ -211,6 +211,7 @@ public class WalletTool {
         ENCRYPT,
         DECRYPT,
         MARRY,
+        UPGRADE,
         ROTATE,
         SET_CREATION_TIME,
     }
@@ -235,7 +236,8 @@ public class WalletTool {
         OptionSpec<String> walletFileName = parser.accepts("wallet").withRequiredArg().defaultsTo("wallet");
         seedFlag = parser.accepts("seed").withRequiredArg();
         watchFlag = parser.accepts("watchkey").withRequiredArg();
-        outputScriptTypeFlag = parser.accepts("output-script-type").withRequiredArg().ofType(Script.ScriptType.class);
+        outputScriptTypeFlag = parser.accepts("output-script-type").withRequiredArg().ofType(Script.ScriptType.class)
+                .defaultsTo(Script.ScriptType.P2PKH);
         OptionSpec<NetworkEnum> netFlag = parser.accepts("net").withRequiredArg().ofType(NetworkEnum.class).defaultsTo(NetworkEnum.MAIN);
         dateFlag = parser.accepts("date").withRequiredArg().ofType(Date.class)
                 .withValuesConvertedBy(DateConverter.datePattern("yyyy/MM/dd"));
@@ -480,6 +482,7 @@ public class WalletTool {
             case ENCRYPT: encrypt(); break;
             case DECRYPT: decrypt(); break;
             case MARRY: marry(); break;
+            case UPGRADE: upgrade(); break;
             case ROTATE: rotate(); break;
             case SET_CREATION_TIME: setCreationTime(); break;
         }
@@ -555,6 +558,27 @@ public class WalletTool {
         wallet.addAndActivateHDChain(chain);
     }
 
+    private static void upgrade() {
+        DeterministicKeyChain activeKeyChain = wallet.getActiveKeyChain();
+        ScriptType currentOutputScriptType = activeKeyChain != null ? activeKeyChain.getOutputScriptType() : null;
+        ScriptType outputScriptType = options.valueOf(outputScriptTypeFlag);
+        if (!wallet.isDeterministicUpgradeRequired(outputScriptType)) {
+            System.err
+                    .println("No upgrade from " + (currentOutputScriptType != null ? currentOutputScriptType : "basic")
+                            + " to " + outputScriptType);
+            return;
+        }
+        KeyParameter aesKey = null;
+        if (wallet.isEncrypted()) {
+            aesKey = passwordToKey(true);
+            if (aesKey == null)
+                return;
+        }
+        wallet.upgradeToDeterministic(outputScriptType, aesKey);
+        System.out.println("Upgraded from " + (currentOutputScriptType != null ? currentOutputScriptType : "basic")
+                + " to " + outputScriptType);
+    }
+
     private static void rotate() throws BlockStoreException {
         setup();
         peerGroup.start();
@@ -567,13 +591,14 @@ public class WalletTool {
         }
         log.info("Setting wallet key rotation time to {}", rotationTimeSecs);
         wallet.setKeyRotationTime(rotationTimeSecs);
+        ScriptType outputScriptType = options.valueOf(outputScriptTypeFlag);
         KeyParameter aesKey = null;
         if (wallet.isEncrypted()) {
             aesKey = passwordToKey(true);
             if (aesKey == null)
                 return;
         }
-        Futures.getUnchecked(wallet.doMaintenance(aesKey, true));
+        Futures.getUnchecked(wallet.doMaintenance(outputScriptType, aesKey, true));
     }
 
     private static void encrypt() {
